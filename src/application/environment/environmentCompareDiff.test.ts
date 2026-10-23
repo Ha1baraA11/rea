@@ -167,7 +167,7 @@ describe("compareAnswers", () => {
     ).toEqual([]);
   });
 
-  it("reports a reordered set of scalars as order alone and reads epoch array items as clocks", () => {
+  it("reports reordered scalar sets as order alone and reads nested epoch clocks under time fields", () => {
     expect(
       compare(
         { access: ["a", "b", "c"] },
@@ -175,9 +175,72 @@ describe("compareAnswers", () => {
       ).differences.map((d) => [d.category, d.pointer]),
     ).toEqual([["order", "/access"]]);
     expect(
-      compare({ stats: [[1792450800, 3]] }, { stats: [[1792285200, 3]] })
-        .differences,
+      compare(
+        { updated_at: [[1792450800, 3]] },
+        { updated_at: [[1792285200, 3]] },
+      ).differences,
     ).toEqual([]);
+  });
+});
+
+describe("epoch array clock context", () => {
+  it("keeps epoch-shaped measurements in non-time arrays literal", () => {
+    const measurements = compare(
+      { samples: [1800000000] },
+      { samples: [1700000000] },
+    );
+    expect(measurements.differences).toEqual([
+      {
+        category: "value",
+        pointer: "/samples/0",
+        live: "1800000000",
+        env: "1700000000",
+      },
+    ]);
+    expect(measurements.normalised.clocks).toBe(0);
+
+    const nestedMeasurements = compare(
+      { samples: [[1800000000, 3]] },
+      { samples: [[1700000000, 3]] },
+    );
+    expect(nestedMeasurements.differences).toEqual([
+      {
+        category: "value",
+        pointer: "/samples/0/0",
+        live: "1800000000",
+        env: "1700000000",
+      },
+    ]);
+    expect(nestedMeasurements.normalised.clocks).toBe(0);
+
+    const rootArray = compare([1800000000], [1700000000]);
+    expect(rootArray.differences).toEqual([
+      {
+        category: "value",
+        pointer: "/0",
+        live: "1800000000",
+        env: "1700000000",
+      },
+    ]);
+    expect(rootArray.normalised.clocks).toBe(0);
+
+    const rootScalar = compare(1800000000, 1700000000);
+    expect(rootScalar.differences).toEqual([
+      {
+        category: "value",
+        pointer: "",
+        live: "1800000000",
+        env: "1700000000",
+      },
+    ]);
+    expect(rootScalar.normalised.clocks).toBe(0);
+
+    const timestamps = compare(
+      { updated_at: [1800000000] },
+      { updated_at: [1700000000] },
+    );
+    expect(timestamps.differences).toEqual([]);
+    expect(timestamps.normalised.clocks).toBe(1);
   });
 });
 

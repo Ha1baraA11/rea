@@ -74,16 +74,15 @@ const formatKey = (format: ClockFormat): string =>
     ? `epoch-${format.unit}`
     : `iso${format.separator}${String(format.fraction)}${format.zone === "" ? "" : format.zone === "Z" ? "Z" : "offset"}`;
 
-/** The format of a clock value: an ISO-8601 string, or an epoch number under a time-named field or as an array item. */
+/** The format of a clock value: an ISO-8601 string, or an epoch number under a time-named field. */
 const clockFormat = (
   value: JsonValue,
   key: string | undefined,
 ): string | undefined => {
   if (
     typeof value === "number" &&
-    key !== undefined &&
-    !TIME_FIELD.test(key) &&
-    !TIME_FIELD_CAMEL.test(key)
+    (key === undefined ||
+      (!TIME_FIELD.test(key) && !TIME_FIELD_CAMEL.test(key)))
   )
     return undefined;
   const clock = readClock(value);
@@ -163,6 +162,7 @@ class Differ {
     env: JsonValue,
     pointer: string,
     at: { readonly key?: string; readonly own?: boolean } = {},
+    clockKey?: string,
   ): void {
     if (live === env) {
       if (this.#reassigned(live, pointer, at))
@@ -195,8 +195,8 @@ class Differ {
         this.normalised.ids += 1;
         return;
       }
-      const liveClock = clockFormat(live, key);
-      const envClock = clockFormat(env, key);
+      const liveClock = clockFormat(live, clockKey);
+      const envClock = clockFormat(env, clockKey);
       if (liveClock !== undefined && envClock !== undefined) {
         if (liveClock === envClock) this.normalised.clocks += 1;
         else
@@ -227,7 +227,12 @@ class Differ {
     });
   }
 
-  array(live: JsonValue[], env: JsonValue[], pointer: string): void {
+  array(
+    live: JsonValue[],
+    env: JsonValue[],
+    pointer: string,
+    clockKey?: string,
+  ): void {
     const own = pointer === this.entity.at;
     if (this.sameItems(live, env, pointer)) return;
     const pairs = pairElements(live, env);
@@ -244,9 +249,15 @@ class Differ {
     )
       this.add({ category: "order", pointer });
     for (const [left, right] of pairs)
-      this.value(live[left]!, env[right]!, `${pointer}/${String(left)}`, {
-        own,
-      });
+      this.value(
+        live[left]!,
+        env[right]!,
+        `${pointer}/${String(left)}`,
+        {
+          own,
+        },
+        clockKey,
+      );
   }
 
   /** Arrays of scalars holding the same items in another order differ only in order, as sets an application returns unordered do. */
@@ -306,11 +317,17 @@ class Differ {
         });
       else {
         matched.add(other);
-        this.value(value, env[other]!, child, {
+        this.value(
+          value,
+          env[other]!,
+          child,
+          {
+            key,
+            own: self,
+            keyed: self && keyed,
+          },
           key,
-          own: self,
-          keyed: self && keyed,
-        });
+        );
       }
     }
     for (const [key, value] of Object.entries(env))
@@ -332,9 +349,10 @@ class Differ {
       readonly own?: boolean;
       readonly keyed?: boolean;
     } = {},
+    clockKey?: string,
   ): void {
     if (Array.isArray(live) && Array.isArray(env))
-      this.array(live, env, pointer);
+      this.array(live, env, pointer, clockKey);
     else if (isObject(live) && isObject(env))
       this.object(
         live,
@@ -354,7 +372,7 @@ class Differ {
         live: shown(live),
         env: shown(env),
       });
-    else this.scalar(live, env, pointer, at);
+    else this.scalar(live, env, pointer, at, clockKey);
   }
 }
 
