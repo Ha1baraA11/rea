@@ -287,13 +287,16 @@ export const registerCoreNativeCommands = (
               new AnalysisOutputError(
                 "trace_native_values",
                 "The CLI session did not return its retained Evidence bundle.",
-              ),
+              ).retainPartialObservation(complete.value),
             );
           const sources = cliEvidenceSourceClosure(
             complete.value,
             sessionBundle.records,
           );
-          if (!sources.ok) return projectAnalysisError(sources.error);
+          if (!sources.ok)
+            return projectAnalysisError(
+              sources.error.retainPartialObservation(complete.value),
+            );
           return publishCliAnalysisEvidence(complete, {
             ...delivery,
             sourceEvidence: sources.value,
