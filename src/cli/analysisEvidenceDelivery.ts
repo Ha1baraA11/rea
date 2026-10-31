@@ -12,7 +12,10 @@ import { projectAnalysisError } from "../domain/analysisErrorProjection.js";
 import type { AnalysisError } from "../domain/analysisErrorBase.js";
 import { redactExplicitFailure } from "../domain/explicitSensitiveFailure.js";
 import { err, ok, type Result } from "../domain/result.js";
-import { AnalysisInputError } from "../domain/analysisErrorCore.js";
+import {
+  AnalysisInputError,
+  AnalysisOutputError,
+} from "../domain/analysisErrorCore.js";
 import { createEvidenceBundle } from "../domain/evidenceBundle.js";
 import { publishEvidenceDelivery } from "../application/EvidenceBundleCommands.js";
 import { inspectAnalysisViewValidated } from "../application/analysisView/AnalysisViewService.js";
@@ -64,6 +67,35 @@ export const cliEvidenceDeliveryInputError = (
         },
       ])
     : undefined;
+
+/** Resolve only the authenticated Evidence records linked by one CLI result. */
+export const cliEvidenceSourceClosure = (
+  root: Evidence,
+  available: readonly Evidence[],
+): Result<Evidence[], AnalysisError> => {
+  const recordsById = new Map(
+    available.map((record) => [record.evidence_id, record]),
+  );
+  const included = new Map<string, Evidence>();
+  const visited = new Set([root.evidence_id]);
+  const pending = [...root.evidence_links];
+  while (pending.length > 0) {
+    const evidenceId = pending.pop();
+    if (evidenceId === undefined || visited.has(evidenceId)) continue;
+    visited.add(evidenceId);
+    const record = recordsById.get(evidenceId);
+    if (record === undefined)
+      return err(
+        new AnalysisOutputError(
+          root.operation,
+          "The CLI session did not retain a source Evidence record referenced by this result.",
+        ),
+      );
+    included.set(evidenceId, record);
+    pending.push(...record.evidence_links);
+  }
+  return ok([...included.values()]);
+};
 
 /** Parse delivery JSON once and enforce its owning schema before opening a target. */
 export const parseCliAnalysisEvidenceDelivery = <
