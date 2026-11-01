@@ -1,5 +1,6 @@
 import { procedureInfoSchema } from "../domain/native/procedureInfo.js";
 import { z } from "zod";
+import { investigationStatisticsSchema } from "../domain/investigationLifecycle.js";
 import { utcDateTimeSchema } from "../domain/offsetDateTime.js";
 
 import { functionDossierSchema } from "../domain/native/functionDossier.js";
@@ -12,13 +13,12 @@ import { jsonObjectSchema } from "../domain/jsonValue.js";
 import {
   PROVIDER_REJECTION_CODES,
   type ProviderRejectionCode,
-} from "./providerSelection.js";
+} from "../domain/providerSelection.js";
 import {
   PROVIDER_FAILURE_STAGES,
   PROVIDER_OPERATION_STATES,
   PROVIDER_RETRY_ACTIONS,
 } from "../domain/providerOperationHealth.js";
-import { analysisErrorProjectionSchema } from "./errorSchemas.js";
 import {
   objcClassDiscoveryCoverageSchema,
   objcClassImportIdentitySchema,
@@ -533,6 +533,7 @@ export function expandToolAvailability(
 /** Session status facts shared by every detail level and session kind. */
 export const sessionProviderFacts = z
   .object({
+    investigation: investigationStatisticsSchema,
     cleanup_pending: z.boolean(),
     capabilities: z.array(providerCapabilitySet),
     analysis_run: analysisRun,
@@ -623,12 +624,6 @@ export const sessionStatusDetailShapes = [
     tool_availability: toolAvailabilityInventory,
   },
 ] as const;
-
-/** Session status for either detail level, keyed by `detail`. */
-export const sessionProvider = z.discriminatedUnion("detail", [
-  sessionProviderFacts.extend(sessionStatusDetailShapes[0]),
-  sessionProviderFacts.extend(sessionStatusDetailShapes[1]),
-]);
 
 export const nullableText = z.string().nullable();
 export const addressedEntry = z.object({

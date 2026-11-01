@@ -1,3 +1,6 @@
+import { ProviderCleanupError } from "../../../src/domain/providerCleanupError.js";
+import { AnalysisCancelledError } from "../../../src/domain/analysisErrorCore.js";
+import { projectAnalysisError } from "../../../src/domain/analysisErrorProjection.js";
 import { projectCliAnalysisResult } from "../../../src/cli/projectCliAnalysisResult.js";
 import { parseConfig } from "../../../src/config/parseConfig.js";
 import { readFile, symlink, writeFile } from "node:fs/promises";
@@ -44,10 +47,8 @@ import { isProfilelessNativeDispatchSnapshot } from "../../../src/application/bi
 import { OwnedStagedOutput } from "../../../src/filesystem/OwnedStagedOutput.js";
 import { ProviderAdapterError } from "../../../src/domain/providerAdapterError.js";
 import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
-import {
-  CAPABILITIES as GHIDRA_CAPABILITIES,
-  GHIDRA_PROVIDER_IDENTITY,
-} from "../../../src/ghidra/GhidraProviderCapabilities.js";
+import { CAPABILITIES as GHIDRA_CAPABILITIES } from "../../../src/ghidra/GhidraProviderCapabilities.js";
+import { GHIDRA_PROVIDER_IDENTITY } from "../../../src/ghidra/GhidraProviderMetadata.js";
 import { nativeInventoryRowsSchemas } from "../../../src/domain/native/nativeInventory.js";
 import { APPLE_DISPATCH_METADATA_ANALYSIS_PROFILE } from "../../../src/native/NativeMacOSProviderMetadata.js";
 
@@ -385,6 +386,88 @@ const withEarlierHistoricalEvidence = (
 };
 
 describe("snapshot output cleanup lifecycle", () => {
+  it.each(["cleanup", "cancelled"] as const)(
+    "preserves the committed snapshot receipt after %s finalization and retry",
+    async (failureKind) => {
+      const fixture = await createSnapshotReplayFixture(
+        "rea-snapshot-close-failure-",
+      );
+      const provider = fixture.createProvider();
+      const failure =
+        failureKind === "cleanup"
+          ? new ProviderCleanupError(
+              IDENTITY.id,
+              ["fixture provider"],
+              {},
+              {
+                partialObservation: createEvidence(undefined, IDENTITY, {
+                  operation: "health",
+                  parameters: {},
+                  result: "cleanup facts",
+                }),
+              },
+            )
+          : new AnalysisCancelledError("close_binary");
+      const cleanupObservation = failure.partialObservation;
+      const close = vi
+        .fn()
+        .mockResolvedValueOnce(err(failure))
+        .mockResolvedValue(ok(null));
+      const session = createTestBinarySession({
+        ...provider,
+        createClient: (target, options) => ({
+          ...provider.createClient(target, options),
+          close,
+        }),
+      });
+      try {
+        const opened = await session.open(fixture.path);
+        if (!opened.ok) throw opened.error;
+        const analyzed = await session.execute("list_segments", {});
+        if (!analyzed.ok) throw analyzed.error;
+        const closed = await session.closeWithSnapshot(
+          fixture.snapshotPath,
+          false,
+        );
+        expect(closed.ok).toBe(false);
+        if (closed.ok) throw new Error("Expected close failure");
+        const committed = await readFile(fixture.snapshotPath);
+        const snapshot = await readAnalysisSnapshot(fixture.snapshotPath);
+        if (!snapshot.ok) throw snapshot.error;
+        const receipt = {
+          path: fixture.snapshotPath,
+          bytes: committed.byteLength,
+          primitive_entries: snapshot.value.entries.length,
+          workflow_entries: snapshot.value.workflow_entries.length,
+          evidence_records: snapshot.value.evidence_bundle.records.length,
+        };
+        expect(
+          projectAnalysisError(closed.error).details?.partial_observation,
+        ).toEqual({
+          saved_snapshot: receipt,
+          ...(cleanupObservation === undefined
+            ? {}
+            : { cleanup_observation: cleanupObservation }),
+        });
+        expect((await session.close()).ok).toBe(true);
+        expect(close).toHaveBeenCalledTimes(2);
+        expect((await readFile(fixture.snapshotPath)).equals(committed)).toBe(
+          true,
+        );
+        expect(
+          projectAnalysisError(closed.error).details?.partial_observation,
+        ).toEqual({
+          saved_snapshot: receipt,
+          ...(cleanupObservation === undefined
+            ? {}
+            : { cleanup_observation: cleanupObservation }),
+        });
+      } finally {
+        await session.close();
+      }
+    },
+  );
+
   it("returns completed analysis after retrying cleanup of a published snapshot", async () => {
     const fixture = await createSnapshotReplayFixture(
       "rea-snapshot-cleanup-retry-",
@@ -506,6 +589,8 @@ const verifyWindowsSnapshotAdmission = async (
 };
 
 it.each([
+  { tool: "binary_overview", arguments: {}, priorRevision: 5 },
+  // Revision 4 overviews predate inventory_coverage and must not replay.
   { tool: "binary_overview", arguments: {}, priorRevision: 4 },
   {
     tool: "inspect_native_api",
@@ -562,6 +647,7 @@ it.each([
     expect(refreshed.limitations).toEqual(
       expect.arrayContaining(first.limitations),
     );
+    expect(refreshed.analysis_profile?.digest).toEqual(expect.any(String));
     expect(refreshed.analysis_profile?.digest).not.toBe(priorProfile.digest);
     expect(refreshed.normalized_result).toEqual(first.normalized_result);
     const starts = [...fixture.starts];
