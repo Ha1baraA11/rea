@@ -1,3 +1,4 @@
+import { JEB_PROVIDER_IDENTITY } from "./JebProviderIdentity.js";
 import {
   JebMcpAcquisitionCleanupFailure,
   JebMcpPhysicalFailure,
@@ -40,12 +41,6 @@ import {
 } from "./JebMcpConnection.js";
 
 const JEB_CONNECTION_REMEDIATION = `Start a JEB client serving MCP (default ${DEFAULT_JEB_MCP_ENDPOINT}) or set REA_JEB_MCP_URL to the running endpoint.`;
-
-export const JEB_PROVIDER_IDENTITY: ProviderIdentity = {
-  id: "jeb",
-  name: "JEB",
-  version: null,
-} as const;
 
 export interface JebProviderOptions {
   /** Caller environment carrying REA_JEB_MCP_URL. */
@@ -159,6 +154,8 @@ const parseJebEnvelope = (
 export class JebProvider implements JebAnalysisPort {
   readonly #connection: JebMcpConnection;
   readonly #endpoint: URL;
+  /** Caller-selected spelling, retained only after endpoint admission succeeds. */
+  readonly #selectedEndpoint: string;
   #clientInformation:
     | Pick<z.infer<typeof clientInformation>, "version" | "gui_client">
     | undefined;
@@ -175,6 +172,8 @@ export class JebProvider implements JebAnalysisPort {
     const endpoint = parseJebMcpEndpoint(environment.REA_JEB_MCP_URL);
     if (!endpoint.ok) throw endpoint.error;
     this.#endpoint = endpoint.value;
+    this.#selectedEndpoint =
+      environment.REA_JEB_MCP_URL || DEFAULT_JEB_MCP_ENDPOINT;
     const createConnection =
       options.connectionFactory ?? createStreamableHttpJebMcpConnection;
     const timeouts = {
@@ -208,7 +207,7 @@ export class JebProvider implements JebAnalysisPort {
           Object.keys(JEB_ENGINE_TOOLS) as JebOperation[]
         ).filter((operation) => tools.has(JEB_ENGINE_TOOLS[operation])),
         diagnostics: {
-          endpoint: this.#endpoint.toString(),
+          endpoint: this.#selectedEndpoint,
           engine_version: information.version ?? null,
         },
       };
@@ -221,8 +220,8 @@ export class JebProvider implements JebAnalysisPort {
           code: "runtime_unavailable",
           reason: projected.message,
           diagnostics: {
-            endpoint: this.#endpoint.toString(),
             ...cause.diagnostics,
+            endpoint: this.#selectedEndpoint,
           },
         };
       }
@@ -230,7 +229,7 @@ export class JebProvider implements JebAnalysisPort {
         status: "unavailable",
         code: "not_configured",
         reason: `${cause instanceof Error ? cause.message : "The JEB MCP endpoint did not respond"}. ${JEB_CONNECTION_REMEDIATION}`,
-        diagnostics: { endpoint: this.#endpoint.toString() },
+        diagnostics: { endpoint: this.#selectedEndpoint },
       };
     }
   }
@@ -247,6 +246,7 @@ export class JebProvider implements JebAnalysisPort {
       return err(
         new AnalysisCancelledError(request.operation, {
           cause: options.signal.reason,
+          diagnostics: { endpoint: this.#selectedEndpoint },
         }),
       );
     try {
@@ -300,7 +300,7 @@ export class JebProvider implements JebAnalysisPort {
     return {
       name: "jeb",
       version: information.version ?? null,
-      endpoint: this.#endpoint.toString(),
+      endpoint: this.#selectedEndpoint,
       gui_client: information.gui_client ?? null,
     };
   }
@@ -375,7 +375,7 @@ export class JebProvider implements JebAnalysisPort {
       engine: {
         name: "jeb",
         version: information.version ?? null,
-        endpoint: this.#endpoint.toString(),
+        endpoint: this.#selectedEndpoint,
         gui_client: information.gui_client ?? null,
       },
       startup_ts: information.startup_ts ?? null,
@@ -524,7 +524,7 @@ export class JebProvider implements JebAnalysisPort {
     const parsed = parseJebEnvelope(
       payload,
       operation,
-      this.#endpoint.toString(),
+      this.#selectedEndpoint,
       input,
     );
     if (!parsed.ok) throw parsed.error;
@@ -546,7 +546,10 @@ export class JebProvider implements JebAnalysisPort {
     ) {
       const options = {
         cause: cause.cause,
-        diagnostics: cause.diagnostics,
+        diagnostics: {
+          ...cause.diagnostics,
+          endpoint: this.#selectedEndpoint,
+        },
         capturedOutput: cause.capturedOutput,
         cleanup: cause.cleanup,
         partialObservation: cause.partialObservation,
@@ -567,11 +570,12 @@ export class JebProvider implements JebAnalysisPort {
         .bindCleanupDependencies([cause])
         .bindCleanupResourceOwner(cause);
     }
-    if (cause instanceof AnalysisError) return cause;
+    if (cause instanceof AnalysisError)
+      return cause.retainDiagnostics({ endpoint: this.#selectedEndpoint });
     if (cause instanceof z.ZodError)
       return new AnalysisProtocolError(
         "JEB omitted or malformed required observation fields",
-        { cause },
+        { cause, diagnostics: { endpoint: this.#selectedEndpoint } },
       );
     const physical =
       cause instanceof JebMcpPhysicalFailure ? cause.cause : cause;
@@ -581,6 +585,7 @@ export class JebProvider implements JebAnalysisPort {
       physical instanceof Error ? physical.message : String(physical),
       {
         cause,
+        diagnostics: { endpoint: this.#selectedEndpoint },
         userMessage: JEB_CONNECTION_REMEDIATION,
       },
     );
