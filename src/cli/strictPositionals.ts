@@ -85,6 +85,12 @@ const mcpAddSurplusError = (
   return `Unexpected positional arguments: ${surplus.map((value) => JSON.stringify(value)).join(" ")}. Use '${displayName} mcp add --help' for the declared argument shape.`;
 };
 
+/** Keep the outer mcp-add registration guard from treating a parse rejection as success. */
+export const hasMcpAddSurplusArguments = (
+  arguments_: readonly string[],
+  displayName = "rea",
+): boolean => mcpAddSurplusError(arguments_, displayName) !== undefined;
+
 /**
  * Incur 0.6.1 drops unbound positionals. Its public parser owns token binding,
  * but provides neither a strict-count option nor raw argv in middleware.
