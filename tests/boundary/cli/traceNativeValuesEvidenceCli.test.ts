@@ -69,6 +69,8 @@ const createTraceFixture = () => {
     total_edges: 0,
     decompilations: 1,
     next_offset: 1,
+    page_truncated: true,
+    traversal: { status: "complete" },
     truncated: true,
     limitations: ["fixture trace limitation"],
   });
@@ -245,6 +247,8 @@ it("publishes a bounded trace summary with a complete evidence bundle", async ()
       unknown_count: 1,
       decompilations: 1,
       next_offset: 1,
+      page_truncated: true,
+      traversal: { status: "complete" },
       truncated: true,
       limitation_count: 1,
     },

@@ -26,6 +26,8 @@ export const nativeValueTraceSummarySchema = z.strictObject({
   unknown_count: z.int().nonnegative(),
   decompilations: z.int().nonnegative(),
   next_offset: z.int().nonnegative().nullable(),
+  page_truncated: nativeValueTraceSchema.shape.page_truncated,
+  traversal: nativeValueTraceSchema.shape.traversal,
   truncated: z.boolean(),
   limitation_count: z.int().nonnegative(),
 });
@@ -70,6 +72,8 @@ export const projectNativeValueTraceView = (
       unknown_count: trace.unknowns.length,
       decompilations: trace.decompilations,
       next_offset: trace.next_offset,
+      page_truncated: trace.page_truncated,
+      traversal: trace.traversal,
       truncated: trace.truncated,
       limitation_count: trace.limitations.length,
     },
