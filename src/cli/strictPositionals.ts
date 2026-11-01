@@ -156,18 +156,30 @@ export const rejectSurplusCliArguments = (
     ];
   });
   return (arguments_, options, serve) => {
+    const started = performance.now();
     const surplusError = mcpAddSurplusError(arguments_, displayName);
     const output = parseCliOutputArguments(arguments_);
     if (surplusError !== undefined && output.validation.ok) {
       const stdout =
         options.stdout ?? ((text: string) => process.stdout.write(text));
       const exit = options.exit ?? ((code: number) => process.exit(code));
+      const failure = { code: "UNKNOWN", message: surplusError };
+      const document = output.fullOutput
+        ? {
+            ok: false,
+            error: failure,
+            meta: {
+              command: "mcp add",
+              duration: `${Math.round(performance.now() - started)}ms`,
+            },
+          }
+        : failure;
+      const format =
+        output.format === "csv" || output.format === "tsv"
+          ? "json"
+          : output.format;
       stdout(
-        `${renderCliDocument(
-          { code: "UNKNOWN", message: surplusError },
-          output.format as Parameters<typeof renderCliDocument>[1],
-          process.stdout.isTTY === true,
-        )}\n`,
+        renderCliDocument(document, format, process.stdout.isTTY === true),
       );
       exit(1);
       return Promise.resolve();

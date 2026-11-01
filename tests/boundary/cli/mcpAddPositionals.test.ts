@@ -1,65 +1,40 @@
 import { access, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { expect, it } from "vitest";
+import { expect } from "vitest";
 
-import { createCli } from "../../../src/cli.js";
 import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
-
-const serve = async (
-  cli: ReturnType<typeof createCli>,
-  arguments_: readonly string[],
-): Promise<{ stdout: string; exitCode: number }> => {
-  let stdout = "";
-  let exitCode = 0;
-  await cli.serve([...arguments_, "--json"], {
-    env: {},
-    stdout: (text) => {
-      stdout += text;
-    },
-    exit: (code) => {
-      exitCode = code;
-    },
-  });
-  return { stdout, exitCode };
-};
+import { cliTest } from "../../support/cli/cliFixture.js";
 
 const expectMissing = async (path: string): Promise<void> => {
   await expect(access(path)).rejects.toMatchObject({ code: "ENOENT" });
 };
 
-it("rejects surplus positional arguments to built-in MCP registration before writing configuration", async () => {
-  const root = await createTestTempDirectory("rea-mcp-add-positionals-");
-  const invalidHome = join(root, "invalid-home");
-  const validHome = join(root, "valid-home");
-  await mkdir(invalidHome);
-  await mkdir(validHome);
+cliTest(
+  "rejects surplus positional arguments to built-in MCP registration before writing configuration",
+  async ({ cli }) => {
+    const root = await createTestTempDirectory("rea-mcp-add-positionals-");
+    const invalidHome = join(root, "invalid-home");
+    const validHome = join(root, "valid-home");
+    await mkdir(invalidHome);
+    await mkdir(validHome);
 
-  const originalHome = process.env.HOME;
-  try {
-    process.env.HOME = invalidHome;
-    for (const helpValue of ["--help", "-h"]) {
-      const invalid = await serve(createCli({}), [
-        "mcp",
-        "add",
-        "extra",
-        "--filter-output",
-        helpValue,
-        "--agent",
-        "amp",
-        "--command",
-        "node --version",
-      ]);
-      expect(invalid.exitCode).toBe(1);
-      expect(JSON.parse(invalid.stdout)).toEqual({
-        code: "UNKNOWN",
-        message:
-          "Unexpected positional arguments: \"extra\". Use 'rea mcp add --help' for the declared argument shape.",
+    const settingsPath = (home: string): string =>
+      join(home, ".config", "amp", "settings.json");
+    const run = (home: string, arguments_: readonly string[]) =>
+      cli.run({
+        arguments: [...arguments_],
+        cwd: root,
+        environment: {
+          HOME: home,
+          USERPROFILE: home,
+          XDG_CONFIG_HOME: join(home, ".config"),
+          XDG_DATA_HOME: join(home, ".local", "share"),
+          XDG_CACHE_HOME: join(home, ".cache"),
+          XDG_STATE_HOME: join(home, ".local", "state"),
+        },
       });
-      await expectMissing(join(invalidHome, ".config", "amp", "settings.json"));
-    }
-
-    const invalid = await serve(createCli({}), [
+    const registration = [
       "mcp",
       "add",
       "extra",
@@ -67,17 +42,95 @@ it("rejects surplus positional arguments to built-in MCP registration before wri
       "amp",
       "--command",
       "node --version",
-    ]);
-    expect(invalid.exitCode).toBe(1);
-    expect(JSON.parse(invalid.stdout)).toEqual({
-      code: "UNKNOWN",
-      message:
-        "Unexpected positional arguments: \"extra\". Use 'rea mcp add --help' for the declared argument shape.",
-    });
-    await expectMissing(join(invalidHome, ".config", "amp", "settings.json"));
+    ];
+    const invalidCases = [
+      { name: "JSON", flags: ["--json"] },
+      { name: "full-output JSON", flags: ["--json", "--full-output"] },
+      {
+        name: "full-output JSON Lines",
+        flags: ["--format", "jsonl", "--full-output"],
+      },
+      {
+        name: "CSV",
+        flags: [
+          "--format",
+          "csv",
+          "--filter-output",
+          "rows",
+          "--columns",
+          "code",
+        ],
+      },
+      {
+        name: "TSV",
+        flags: [
+          "--format",
+          "tsv",
+          "--filter-output",
+          "rows",
+          "--columns",
+          "code",
+        ],
+      },
+      {
+        name: "help-shaped filter value",
+        flags: ["--filter-output", "--help", "--json"],
+      },
+      {
+        name: "short-help-shaped filter value",
+        flags: ["--filter-output", "-h", "--json"],
+      },
+    ];
 
-    process.env.HOME = validHome;
-    const valid = await serve(createCli({}), [
+    for (const scenario of invalidCases) {
+      const result = await run(invalidHome, [
+        ...registration,
+        ...scenario.flags,
+      ]);
+      expect(result.exitCode, scenario.name).toBe(1);
+      expect(result.stderr, scenario.name).toBe("");
+      if (scenario.name === "full-output JSON") {
+        expect(result.json).toMatchObject({
+          ok: false,
+          error: {
+            code: "UNKNOWN",
+            message: expect.stringContaining("extra"),
+          },
+          meta: {
+            command: "mcp add",
+            duration: expect.stringMatching(/^\d+ms$/),
+          },
+        });
+      } else if (scenario.name === "full-output JSON Lines") {
+        expect(result.json).toMatchObject({
+          $rea: expect.any(String),
+          type: "error",
+          ok: false,
+          result: {
+            ok: false,
+            error: {
+              code: "UNKNOWN",
+              message: expect.stringContaining("extra"),
+            },
+            meta: {
+              command: "mcp add",
+              duration: expect.stringMatching(/^\d+ms$/),
+            },
+          },
+        });
+      } else {
+        expect(result.json).toMatchObject({
+          code: "UNKNOWN",
+          message: expect.stringContaining("extra"),
+        });
+      }
+      expect(JSON.stringify(result.json), scenario.name).not.toContain(
+        "selected output path does not contain a row array",
+      );
+      await expectMissing(settingsPath(invalidHome));
+    }
+
+    const valid = await run(validHome, [
       "mcp",
       "add",
       "--agent",
@@ -85,20 +138,14 @@ it("rejects surplus positional arguments to built-in MCP registration before wri
       "--command",
       "node --version",
     ]);
-    expect(valid.exitCode).toBe(0);
+    expect(valid.exitCode, valid.stderr).toBe(0);
     expect(valid.stdout).toContain("Registered rea as MCP server");
     const configuration = JSON.parse(
-      await readFile(
-        join(validHome, ".config", "amp", "settings.json"),
-        "utf8",
-      ),
+      await readFile(settingsPath(validHome), "utf8"),
     ) as { "amp.mcpServers"?: Record<string, unknown> };
     expect(configuration["amp.mcpServers"]?.rea).toMatchObject({
       command: "node",
       args: ["--version"],
     });
-  } finally {
-    if (originalHome === undefined) delete process.env.HOME;
-    else process.env.HOME = originalHome;
-  }
-});
+  },
+);
